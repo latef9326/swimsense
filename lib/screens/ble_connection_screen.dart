@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../repositories/ble_repository.dart';
+import '../repositories/ble_repository_improved.dart';
 import '../blocs/ble_connection/ble_connection_cubit.dart';
 
 class BleConnectionScreen extends StatefulWidget {
@@ -19,14 +19,16 @@ class _BleConnectionScreenState extends State<BleConnectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => BleConnectionCubit(connectStream: _bleRepo.connectToDevice),
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('BLE Devices'),
-        ),
-        body: Column(
-          children: [
+    // ✅ IMPORTANT: Use the BleConnectionCubit from main.dart (already provided)
+    // Do NOT create a new instance here - it won't have LiveTrainingCubit reference!
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('BLE Devices'),
+      ),
+      body: BlocBuilder<BleConnectionCubit, BleConnectionState>(
+        builder: (context, state) {
+          return Column(
+            children: [
             // Mode toggle
             Card(
               margin: const EdgeInsets.all(8),
@@ -177,7 +179,8 @@ class _BleConnectionScreenState extends State<BleConnectionScreen> {
               },
             ),
           ],
-        ),
+        );
+        },
       ),
     );
   }

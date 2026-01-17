@@ -1,4 +1,5 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:hive/hive.dart';
 import 'dart:math' as math;
 import 'package:swimsense/models/heart_rate_zones.dart';
@@ -66,6 +67,11 @@ class AnalyticsCubit extends Cubit<AnalyticsState> {
   late List<TrainingMetrics> _recentMetrics;
   late PerformanceComparison _weeklyComparison;
   late PerformanceComparison _monthlyComparison;
+  
+  // ✅ Analytics tracking
+  int _reconnectAttempts = 0;
+  int _autoSavesTriggered = 0;
+  int _deviceDisconnects = 0;
 
   AnalyticsCubit(this.sessionBox) : super(AnalyticsInitial()) {
     _initializeFitnessIndicators();
@@ -254,6 +260,36 @@ class AnalyticsCubit extends Cubit<AnalyticsState> {
 
       return metrics;
     }).toList();
+  }
+
+  /// ✅ Track reconnection attempt
+  void trackReconnectAttempt(String deviceId, int attemptNumber) {
+    _reconnectAttempts++;
+    debugPrint('📊 Analytics: Reconnect attempt #$attemptNumber for $deviceId '
+               '(total: $_reconnectAttempts)');
+  }
+
+  /// ✅ Track auto-save triggered
+  void trackAutoSaveTriggered(String deviceId, String reason) {
+    _autoSavesTriggered++;
+    debugPrint('📊 Analytics: Auto-save triggered for $deviceId - $reason '
+               '(total: $_autoSavesTriggered)');
+  }
+
+  /// ✅ Track device disconnect
+  void trackDeviceDisconnect(String deviceId) {
+    _deviceDisconnects++;
+    debugPrint('📊 Analytics: Device disconnected: $deviceId '
+               '(total: $_deviceDisconnects)');
+  }
+
+  /// ✅ Get reconnect analytics summary
+  Map<String, int> getReconnectAnalytics() {
+    return {
+      'totalReconnectAttempts': _reconnectAttempts,
+      'totalAutoSavesTriggered': _autoSavesTriggered,
+      'totalDeviceDisconnects': _deviceDisconnects,
+    };
   }
 
   @override

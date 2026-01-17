@@ -1,4 +1,4 @@
-import '../../repositories/ble_repository.dart';
+import '../../repositories/ble_repository_improved.dart';
 import '../../models/swim_session.dart';
 
 enum TrainingStatus { notStarted, running, paused, finished }
@@ -6,6 +6,9 @@ enum TrainingStatus { notStarted, running, paused, finished }
 class LiveTrainingState {
   final TrainingStatus status;
   final Duration elapsedTime;
+  // Millisecond-precision fields (added for high-resolution timer)
+  final int elapsedTimeMillis;
+  final int currentTimeMillis;
   final TrainingData? currentData;
   final List<TrainingData> dataHistory;
   final SwimSession? completedSession;
@@ -18,6 +21,8 @@ class LiveTrainingState {
   LiveTrainingState({
     this.status = TrainingStatus.notStarted,
     this.elapsedTime = Duration.zero,
+    this.elapsedTimeMillis = 0,
+    this.currentTimeMillis = 0,
     this.currentData,
     List<TrainingData>? dataHistory,
     this.completedSession,
@@ -32,6 +37,8 @@ class LiveTrainingState {
   LiveTrainingState copyWith({
     TrainingStatus? status,
     Duration? elapsedTime,
+    int? elapsedTimeMillis,
+    int? currentTimeMillis,
     TrainingData? currentData,
     List<TrainingData>? dataHistory,
     SwimSession? completedSession,
@@ -44,6 +51,8 @@ class LiveTrainingState {
     return LiveTrainingState(
       status: status ?? this.status,
       elapsedTime: elapsedTime ?? this.elapsedTime,
+      elapsedTimeMillis: elapsedTimeMillis ?? this.elapsedTimeMillis,
+      currentTimeMillis: currentTimeMillis ?? this.currentTimeMillis,
       currentData: currentData ?? this.currentData,
       dataHistory: dataHistory ?? this.dataHistory,
       completedSession: completedSession ?? this.completedSession,
@@ -54,8 +63,11 @@ class LiveTrainingState {
       autoLapEnabled: autoLapEnabled ?? this.autoLapEnabled,
     );
   }
-
+  
   List<Duration> get lapDurations => lapTimesMillis.map((ms) => Duration(milliseconds: ms)).toList();
   int get lapCount => lapTimesMillis.length;
-  Duration get currentLapTime => Duration(milliseconds: elapsedTime.inMilliseconds - lastLapStartElapsedMs);
+  Duration get currentLapTime {
+    final elapsedMs = elapsedTimeMillis > 0 ? elapsedTimeMillis : elapsedTime.inMilliseconds;
+    return Duration(milliseconds: elapsedMs - lastLapStartElapsedMs);
+  }
 }

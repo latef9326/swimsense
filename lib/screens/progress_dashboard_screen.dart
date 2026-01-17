@@ -30,6 +30,31 @@ class _ProgressDashboardScreenState extends State<ProgressDashboardScreen>
     super.dispose();
   }
 
+  void _showFitnessScoreInfo() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Fitness Score'),
+          content: const Text(
+            'Your Fitness Score (0-100) measures your overall cardiovascular fitness based on:\n\n'
+            '• Swimming pace and efficiency\n'
+            '• Heart rate response to training\n'
+            '• Training consistency and volume\n'
+            '• Recovery capacity\n\n'
+            'Higher scores indicate better aerobic fitness and training adaptation.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -119,9 +144,35 @@ class _ProgressDashboardScreenState extends State<ProgressDashboardScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Fitness Score',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                const Text(
+                  'Fitness Score',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: _showFitnessScoreInfo,
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade100,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Text(
+                        '?',
+                        style: TextStyle(
+                          color: Colors.blue.shade700,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             Row(

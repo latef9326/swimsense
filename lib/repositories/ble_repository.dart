@@ -17,8 +17,21 @@ class TrainingData {
   final double distance; // meters
   final int strokes;
   final double pace; // minutes per 100m
+  final double speed; // m/s
 
-  TrainingData(this.heartRate, this.distance, this.strokes, this.pace);
+  TrainingData(this.heartRate, this.distance, this.strokes, this.pace, {this.speed = 0.0});
+
+  /// Factory helper to create TrainingData from distance and elapsed time
+  factory TrainingData.fromDistanceAndTime({
+    required int heartRate,
+    required double distanceMeters,
+    required Duration elapsedTime,
+    required int strokes,
+  }) {
+    final speed = elapsedTime.inSeconds > 0 ? distanceMeters / elapsedTime.inSeconds : 0.0;
+    final pace = speed > 0 ? (100.0 / speed) / 60.0 * 60.0 : 0.0; // rough conversion to min/100m
+    return TrainingData(heartRate, distanceMeters, strokes, pace, speed: speed);
+  }
 }
 
 /// Real BLE repository using flutter_reactive_ble with simulation fallback.
@@ -174,8 +187,9 @@ class BleRepository {
         distance += 0.5; // small increment per update
         strokes += 1;
         final pace = 2.0 + (hr - 100) * 0.01; // Rough estimation
+        final speed = 0.5; // approximate speed in m/s for this update
 
-        return TrainingData(hr, distance, strokes, pace);
+        return TrainingData(hr, distance, strokes, pace, speed: speed);
       }).handleError((e) {
         debugPrint('HR subscription error: $e, falling back to simulation');
       }).transform(
@@ -217,8 +231,9 @@ class BleRepository {
       distance += 25.0;
       strokes += 8 + _rand.nextInt(6);
       final pace = 1.5 + _rand.nextDouble() * 1.5;
+      final speed = 1.0 + _rand.nextDouble() * 1.5; // simulate varying speed
 
-      yield TrainingData(hr, distance, strokes, pace);
+      yield TrainingData(hr, distance, strokes, pace, speed: speed);
     }
   }
 

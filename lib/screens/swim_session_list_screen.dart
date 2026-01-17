@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../blocs/analytics/analytics_cubit.dart';
+import '../blocs/coaching/coaching_cubit.dart';
 import '../models/swim_session.dart';
 import 'training_detail_screen.dart';
 
@@ -13,40 +16,202 @@ class SwimSessionListScreen extends StatefulWidget {
 
 class _SwimSessionListScreenState extends State<SwimSessionListScreen> {
   final Box<SwimSession> sessionBox = Hive.box<SwimSession>('swim_sessions');
+  
+  // Form controllers for custom session
+  late TextEditingController _distanceController;
+  late TextEditingController _lapsController;
+  late TextEditingController _strokesController;
+  late TextEditingController _hrAvgController;
+  late TextEditingController _paceController;
+  late TextEditingController _durationMinController;
 
-  void _addSampleSession() {
-    final session = SwimSession()
-      ..startTime = DateTime.now().subtract(const Duration(hours: 1))
-      ..endTime = DateTime.now()
-      ..totalStrokes = 850
-      ..distance = 1000.0
-      ..elapsedTime = 3600 // 1 hour in seconds
-      ..averageHeartRate = 142
-      ..maxHeartRate = 156
-      ..averagePace = 1.8
-      ..laps = 40
-      ..swimStyle = 'freestyle'
-      ..calories = 420
-      ..heartRateData = List.generate(40, (i) => 120 + (i % 10));
+  @override
+  void initState() {
+    super.initState();
+    _distanceController = TextEditingController();
+    _lapsController = TextEditingController();
+    _strokesController = TextEditingController();
+    _hrAvgController = TextEditingController();
+    _paceController = TextEditingController();
+    _durationMinController = TextEditingController();
+  }
 
-    sessionBox.add(session);
+  @override
+  void dispose() {
+    _distanceController.dispose();
+    _lapsController.dispose();
+    _strokesController.dispose();
+    _hrAvgController.dispose();
+    _paceController.dispose();
+    _durationMinController.dispose();
+    super.dispose();
+  }
+
+  void _showAddSessionDialog() {
+    // Reset form
+    _distanceController.clear();
+    _lapsController.clear();
+    _strokesController.clear();
+    _hrAvgController.clear();
+    _paceController.clear();
+    _durationMinController.clear();
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Add Custom Session'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: _distanceController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Distance (m)',
+                    hintText: '1000',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _lapsController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Laps',
+                    hintText: '40',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _strokesController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Strokes',
+                    hintText: '850',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _hrAvgController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Avg Heart Rate (bpm)',
+                    hintText: '140',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _paceController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Pace (min/100m)',
+                    hintText: '1.8',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _durationMinController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Duration (minutes)',
+                    hintText: '60',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                _saveCustomSession();
+                Navigator.of(context).pop();
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _saveCustomSession() {
+    try {
+      final distance = double.parse(_distanceController.text);
+      final laps = int.parse(_lapsController.text);
+      final strokes = int.parse(_strokesController.text);
+      final hrAvg = int.parse(_hrAvgController.text);
+      final pace = double.parse(_paceController.text);
+      final durationMin = int.parse(_durationMinController.text);
+
+      final session = SwimSession()
+        ..startTime = DateTime.now().subtract(Duration(minutes: durationMin))
+        ..endTime = DateTime.now()
+        ..totalStrokes = strokes
+        ..distance = distance
+        ..elapsedTime = durationMin * 60 // in seconds
+        ..averageHeartRate = hrAvg
+        ..maxHeartRate = (hrAvg * 1.1).toInt()
+        ..averagePace = pace
+        ..laps = laps
+        ..swimStyle = 'custom'
+        ..calories = (durationMin * 7).toInt() // rough estimate
+        ..heartRateData = List.generate(60, (i) => (hrAvg - 10 + (i % 20)).toInt());
+
+      sessionBox.add(session);
+      
+      // Refresh analytics
+      context.read<AnalyticsCubit>().loadAnalytics();
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Session saved and analytics updated'),
+          duration: Duration(milliseconds: 1500),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Invalid input: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   void _clearAllSessions() {
     sessionBox.clear();
   }
 
+  void _deleteSession(int index) {
+    sessionBox.deleteAt(index);
+    // Notify AnalyticsCubit to reload analytics and update Progress Dashboard
+      context.read<CoachingCubit>().loadRecommendations();
+    context.read<AnalyticsCubit>().loadAnalytics();
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Session deleted'),
+        duration: Duration(milliseconds: 1500),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SwimSense - Twoje Sesje'),
+        title: const Text('Session History'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
             icon: const Icon(Icons.delete),
             onPressed: _clearAllSessions,
-            tooltip: 'Wyczyść wszystkie sesje',
+            tooltip: 'Clear all sessions',
           ),
         ],
       ),
@@ -79,41 +244,64 @@ class _SwimSessionListScreenState extends State<SwimSessionListScreen> {
             );
           }
 
-          return ListView.builder(
-            itemCount: sessions.length,
-            itemBuilder: (context, index) {
-              final session = sessions[index];
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: ListTile(
-                  leading: const Icon(Icons.pool, color: Colors.blue),
-                  title: Text(
-                    '${session.distance} m',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+          return SingleChildScrollView(
+            child: ListView.builder(
+              physics: const NeverScrollableScrollPhysics(),
+              shrinkWrap: true,
+              itemCount: sessions.length,
+              itemBuilder: (context, index) {
+                final session = sessions[index];
+                return Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: ListTile(
+                    leading: const Icon(Icons.pool, color: Colors.blue),
+                    title: Text(
+                      '${session.distance} m',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(
+                      '${session.totalStrokes} strokes • ${_formatDuration(session.elapsedTime)}${session.isPartial ? ' (partial)' : ''}\nHR avg: ${session.averageHeartRate} bpm • Laps: ${session.laps}',
+                    ),
+                    trailing: PopupMenuButton<String>(
+                      onSelected: (String result) {
+                        if (result == 'delete') {
+                          _deleteSession(index);
+                        }
+                      },
+                      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                        const PopupMenuItem<String>(
+                          value: 'delete',
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete, size: 20, color: Colors.red),
+                              SizedBox(width: 12),
+                              Text('Delete Session'),
+                            ],
+                          ),
+                        ),
+                      ],
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (session.isPartial) const Icon(Icons.warning, color: Colors.orange, size: 16),
+                          Text(_formatDate(session.startTime)),
+                          Text(session.swimStyle),
+                        ],
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => TrainingDetailScreen(session: session)));
+                    },
                   ),
-                  subtitle: Text(
-                    '${session.totalStrokes} strokes • ${_formatDuration(session.elapsedTime)}${session.isPartial ? ' (partial)' : ''}\nHR avg: ${session.averageHeartRate} bpm • Laps: ${session.laps}',
-                  ),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (session.isPartial) const Icon(Icons.warning, color: Colors.orange, size: 16),
-                      Text(_formatDate(session.startTime)),
-                      Text(session.swimStyle),
-                    ],
-                  ),
-                  onTap: () {
-                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => TrainingDetailScreen(session: session)));
-                  },
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _addSampleSession,
-        tooltip: 'Dodaj przykładową sesję',
+        onPressed: _showAddSessionDialog,
+        tooltip: 'Add custom session',
         child: const Icon(Icons.add),
       ),
     );

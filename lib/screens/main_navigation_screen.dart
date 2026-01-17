@@ -4,7 +4,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'ble_connection_screen.dart';
 import 'live_training_screen.dart';
 import 'swim_session_list_screen.dart';
-import '../blocs/ble_connection/ble_connection_cubit.dart';
 import 'progress_dashboard_screen.dart';
 import 'coaching_screen.dart';
 
@@ -20,18 +19,21 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final bleCubit = context.read<BleConnectionCubit>();
+    // ✅ Not needed - LiveTrainingScreen now reads from context
+    // final bleCubit = context.read<BleConnectionCubit>();
 
     final pages = <Widget>[
       const BleConnectionScreen(),
       const ProgressDashboardScreen(),
-      LiveTrainingScreen(bleCubit: bleCubit),
+      const LiveTrainingScreen(),  // ✅ No bleCubit parameter
       const SwimSessionListScreen(),
       const CoachingScreen(),
     ];
 
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: pages),
+      body: SafeArea(
+        child: IndexedStack(index: _currentIndex, children: pages),
+      ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         type: BottomNavigationBarType.fixed,
