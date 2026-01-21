@@ -56,12 +56,12 @@ class BleConnectionCubit extends Cubit<BleConnectionState> {
   static const int _maxReconnectAttempts = 2;
   static const Duration _reconnectDelay = Duration(seconds: 5);
   
-  // ✅ FIX #1: Store last connected device for reconnect
+  // ✅ Store last connected device for reconnect logic
   String? _lastConnectedDeviceId;
   String? _lastConnectedDeviceName;
   
   // ✅ Analytics reference for tracking
-  AnalyticsCubit? _analyticsCubit;
+  final AnalyticsCubit? _analyticsCubit;
   
   // ✅ PROVIDER SCOPE FIX: Direct reference to LiveTrainingCubit (set after both cubits created)
   LiveTrainingCubit? _liveTrainingCubit;
@@ -97,11 +97,11 @@ class BleConnectionCubit extends Cubit<BleConnectionState> {
           // ✅ Show snackbar feedback to user
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Row(
+              content: const Row(
                 children: [
                   Icon(Icons.cloud_done, color: Colors.white),
-                  const SizedBox(width: 12),
-                  const Text('Session auto-saved', style: TextStyle(color: Colors.white)),
+                  SizedBox(width: 12),
+                  Text('Session auto-saved', style: TextStyle(color: Colors.white)),
                 ],
               ),
               duration: const Duration(seconds: 2),
@@ -223,7 +223,7 @@ class BleConnectionCubit extends Cubit<BleConnectionState> {
       _reconnectAttempts++;
       emit(state.copyWith(
         status: BleStatus.reconnecting,
-        errorMessage: 'Reconnecting... (${_reconnectAttempts}/$_maxReconnectAttempts)',
+        errorMessage: 'Reconnecting... ($_reconnectAttempts/$_maxReconnectAttempts)',
         reconnectAttempts: _reconnectAttempts,
       ));
 
@@ -238,7 +238,7 @@ class BleConnectionCubit extends Cubit<BleConnectionState> {
         await connect(state.deviceId!, state.deviceName ?? 'Unknown Device');
       }
     } else {
-      debugPrint('❌ Max reconnection attempts (${_maxReconnectAttempts}) reached');
+      debugPrint('❌ Max reconnection attempts ($_maxReconnectAttempts) reached');
       emit(state.copyWith(
         status: BleStatus.error,
         errorMessage: 'Device disconnected. Max reconnection attempts reached.',

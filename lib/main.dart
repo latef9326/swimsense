@@ -13,6 +13,7 @@ import 'blocs/ble_connection/ble_connection_cubit.dart';
 import 'blocs/analytics/analytics_cubit.dart';
 import 'blocs/coaching/coaching_cubit.dart';
 import 'blocs/live_training/live_training_cubit.dart';
+import 'blocs/user_profile/user_profile_cubit.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -112,6 +113,7 @@ class _MyAppState extends State<MyApp> {
         BlocProvider.value(value: _bleCubit),
         BlocProvider.value(value: _analyticsCubit),
         BlocProvider.value(value: _coachingCubit),
+        BlocProvider<UserProfileCubit>(create: (_) => UserProfileCubit()),
       ],
       child: MaterialApp(
         title: 'SwimSense',
@@ -125,8 +127,6 @@ class _MyAppState extends State<MyApp> {
             onSecondary: Colors.white,
             error: Colors.red,
             onError: Colors.white,
-            background: Color(0xFFe0f7fa),
-            onBackground: Colors.black,
             surface: Colors.white,
             onSurface: Colors.black,
           ),
@@ -150,7 +150,7 @@ class _MyAppState extends State<MyApp> {
                 displayColor: Colors.black87,
               ),
         ),
-        home: WaterBackground(child: const MainNavigationScreen()),
+        home: const WaterBackground(child: MainNavigationScreen()),
       ),
     );
   }

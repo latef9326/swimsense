@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'ble_connection_screen.dart';
 import 'live_training_screen.dart';
 import 'swim_session_list_screen.dart';
 import 'progress_dashboard_screen.dart';
 import 'coaching_screen.dart';
+import 'settings_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
@@ -19,22 +19,39 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Not needed - LiveTrainingScreen now reads from context
-    // final bleCubit = context.read<BleConnectionCubit>();
-
+    // ✅ Pages WITHOUT Settings (0-4 only for BottomNavigationBar)
     final pages = <Widget>[
       const BleConnectionScreen(),
       const ProgressDashboardScreen(),
-      const LiveTrainingScreen(),  // ✅ No bleCubit parameter
+      const LiveTrainingScreen(),
       const SwimSessionListScreen(),
       const CoachingScreen(),
+      // Settings is shown when _currentIndex == 5, not in pages list
     ];
 
     return Scaffold(
       body: SafeArea(
-        child: IndexedStack(index: _currentIndex, children: pages),
+        child: _currentIndex == 5 
+          ? const SettingsScreen()  // Show settings when index=5
+          : IndexedStack(index: _currentIndex, children: pages),
       ),
-      bottomNavigationBar: BottomNavigationBar(
+      appBar: _currentIndex == 5 ? AppBar(
+        title: const Text('Settings'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => setState(() => _currentIndex = 2),
+        ),
+      ) : AppBar(
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => setState(() => _currentIndex = 5),
+            tooltip: 'Settings',
+          ),
+        ],
+      ),
+      bottomNavigationBar: _currentIndex == 5 ? null : BottomNavigationBar(
         currentIndex: _currentIndex,
         type: BottomNavigationBarType.fixed,
         items: const [

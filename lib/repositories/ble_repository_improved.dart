@@ -245,17 +245,17 @@ class BleRepository {
             return _parseHeartRateMeasurement(data, distance, strokes, lastHr, id);
           } catch (e) {
             debugPrint('❌ Error parsing HR data: $e');
-            return TrainingData(lastHr, distance, strokes, 2.0, speed: 0.5);
+            return TrainingData(lastHr, distance, strokes, 2.0, speed: 0.0);
           }
         })
         .map((parsedData) {
           // Update tracking variables
           lastHr = parsedData.heartRate;
-          distance += 0.5; // Increment distance per update
+          // ❌ REMOVED: distance += 0.5; - DISTANCE ONLY FROM GPS!
           strokes += 1;
           
           final pace = 2.0 + (lastHr - 100) * 0.01; // Rough estimation
-          final speed = 0.5; // m/s for this update
+          const speed = 0.0; // ✅ Speed from GPS only, BLE should use 0
 
           return TrainingData(lastHr, distance, strokes, pace, speed: speed);
         })

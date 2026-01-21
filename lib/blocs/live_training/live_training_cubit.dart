@@ -2,22 +2,33 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../ble_connection/ble_connection_cubit.dart';
+import '../user_profile/user_profile_cubit.dart';
 import '../../repositories/swim_session_repository.dart';
 import '../../models/swim_session.dart';
+import '../../models/user_profile.dart';
 import '../../repositories/ble_repository_improved.dart';
+import '../../services/location_service.dart';
 import 'live_training_state.dart';
 
 class LiveTrainingCubit extends Cubit<LiveTrainingState> {
   BleConnectionCubit? bleCubit;  // ✅ Mutable, not final
+  UserProfileCubit? userProfileCubit;  // ✅ For user metrics
   final SwimSessionRepository sessionRepo;
+  final LocationService _locationService = LocationService();
 
   Timer? _timer;
   StreamSubscription? _bleStateSub;
+  StreamSubscription? _locationSub;
   DateTime? _startTime;
   // start time in milliseconds since epoch for high-resolution timer
   int _startTimeMillis = 0;
+  
+  // GPS distance tracking
+  Position? _lastPosition;
+  double _totalDistance = 0.0;
 
   LiveTrainingCubit({this.bleCubit, required this.sessionRepo}) : super(LiveTrainingState());
 
@@ -27,13 +38,53 @@ class LiveTrainingCubit extends Cubit<LiveTrainingState> {
     debugPrint('✅ BleCubit reference set in LiveTrainingCubit');
   }
 
-  void startTraining() {
+  /// ✅ Set UserProfileCubit reference after initialization
+  void setUserProfileCubit(UserProfileCubit cubit) {
+    userProfileCubit = cubit;
+    debugPrint('✅ UserProfileCubit reference set in LiveTrainingCubit');
+  }
+
+  void startTraining() async {
     if (state.status == TrainingStatus.running) return;
 
+    // ✅ CRITICAL: Cancel any old GPS stream before starting fresh
+    await _locationSub?.cancel();
+    _locationSub = null;
+    _totalDistance = 0.0;
+    _lastPosition = null;
+    debugPrint('📍 INITIAL RESET: distance=0.0m, position=null');
+    
     _startTime = DateTime.now();
     _startTimeMillis = _startTime!.millisecondsSinceEpoch;
+    
     emit(LiveTrainingState(status: TrainingStatus.running, elapsedTime: Duration.zero, elapsedTimeMillis: 0, currentTimeMillis: _startTimeMillis, dataHistory: [], lapTimesMillis: [], lastLapStartElapsedMs: 0));
 
+    debugPrint('📍 startTraining() - Checking location permission...');
+    
+    // 🔧 PROPER RUNTIME PERMISSION CHECK using Geolocator - ASYNC, DON'T BLOCK
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      
+      if (permission == LocationPermission.denied) {
+        debugPrint('⚠️  Location permission denied - requesting...');
+        permission = await Geolocator.requestPermission();
+      }
+      
+      if (permission == LocationPermission.deniedForever) {
+        debugPrint('🔴 Location permission denied forever - opening app settings');
+        await Geolocator.openLocationSettings();
+      } else if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+        debugPrint('✅ Location permission granted - starting GPS stream');
+        // ✅ CRITICAL FIX: Always subscribe (state was already emitted as running above)
+        _subscribeToLocationUpdates();
+      } else {
+        debugPrint('⚠️  Location permission: $permission - cannot start GPS');
+      }
+    } catch (e) {
+      debugPrint('🔴 Permission error: $e');
+    }
+
+    // ✅ CRITICAL: Start timer IMMEDIATELY (don't wait for GPS permission async)
     // High-resolution timer with centiseconds (10ms interval)
     _timer = Timer.periodic(const Duration(milliseconds: 10), (_) {
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -72,10 +123,124 @@ class LiveTrainingCubit extends Cubit<LiveTrainingState> {
             }
           }
 
-          emit(state.copyWith(currentData: last, dataHistory: newHistory));
+          // 🔧 CRITICAL MERGE FIX: Preserve GPS distance and speed when BLE emits!
+          // BLE provides HR and strokes, but GPS provides distance and speed
+          final mergedBleData = TrainingData(
+            last.heartRate,                           // From BLE
+            state.currentData?.distance ?? 0.0,       // ✅ PRESERVE GPS distance
+            last.strokes,                             // From BLE
+            state.currentData?.pace ?? last.pace,     // Preserve GPS pace
+            speed: state.currentData?.speed ?? last.speed,  // ✅ PRESERVE GPS speed
+          );
+          emit(state.copyWith(currentData: mergedBleData, dataHistory: newHistory));
         }
       }
       });
+    }
+  }
+
+  /// ✅ NEW: Subscribe to GPS location updates and calculate distance
+  /// CRITICAL: Merge GPS data with BLE data (strokes, HR) instead of overwriting
+  void _subscribeToLocationUpdates() {
+    debugPrint('📍 _subscribeToLocationUpdates() - Getting position stream...');
+    try {
+      _locationSub = _locationService.getPositionStream().listen(
+        (position) {
+          // 📍 RAW GPS LOG - always capture
+          debugPrint('📍 GPS RAW: acc=${position.accuracy.toStringAsFixed(1)}m, speed=${position.speed.toStringAsFixed(2)}m/s, lat=${position.latitude.toStringAsFixed(6)}, lon=${position.longitude.toStringAsFixed(6)}');
+          
+          if (state.status != TrainingStatus.running) {
+            debugPrint('⏭️ GPS ignored - status is ${state.status}, not running');
+            return;
+          }
+          
+          // ✅ Filter out poor GPS accuracy (> 40 meters for indoor tolerance)
+          // Indoor GPS is typically 15-30m, outdoor is 5-10m
+          if (position.accuracy > 40.0) {
+            debugPrint('📍 GPS accuracy POOR: ${position.accuracy.toStringAsFixed(1)}m > 40m threshold - ignoring');
+            return;
+          }
+          
+          if (kDebugMode) {
+            debugPrint('📍 Processing GPS Position: lat=${position.latitude}, lon=${position.longitude}, speed=${position.speed.toStringAsFixed(2)} m/s');
+          }
+          
+          // Initialize first position
+          if (_lastPosition == null) {
+            _lastPosition = position;
+            if (kDebugMode) {
+              debugPrint('📍 First valid position recorded for distance baseline');
+            }
+            return;
+          }
+          
+          // Calculate distance between last and current position
+          final distance = LocationService.calculateDistance(
+            _lastPosition!.latitude,
+            _lastPosition!.longitude,
+            position.latitude,
+            position.longitude,
+          );
+          
+          // 🔧 CRITICAL FILTERS: Ignore GPS drift and impossible values
+          if (distance < 0.5) {
+            // GPS drift - update position but don't count
+            _lastPosition = position;
+            if (kDebugMode) {
+              debugPrint('📍 GPS drift ignored (${distance.toStringAsFixed(2)}m < 0.5m threshold)');
+            }
+            return;
+          }
+          
+          if (distance > 50.0) {
+            // GPS jump - ignore completely (likely error)
+            if (kDebugMode) {
+              debugPrint('📍 GPS jump ignored (${distance.toStringAsFixed(1)}m > 50m threshold)');
+            }
+            return;
+          }
+          
+          // ✅ REMOVED: speed < 0.3 filter - was blocking swimming with small speeds!
+          
+          _totalDistance += distance;
+          _lastPosition = position;
+          
+          if (kDebugMode) {
+            debugPrint('📍✅ Distance INCREMENT: ${distance.toStringAsFixed(2)}m, TOTAL: ${_totalDistance.toStringAsFixed(2)}m, Speed: ${position.speed.toStringAsFixed(2)} m/s');
+          }
+          
+          // Calculate pace: min per 100m
+          final pace = _totalDistance > 0 
+            ? (state.elapsedTime.inSeconds / 60) / (_totalDistance / 100)
+            : 0.0;
+          
+          // 🔧 CRITICAL FIX: MERGE GPS data with existing BLE data (HR, strokes)
+          // Don't overwrite BLE-sourced fields with zero values!
+          final mergedData = TrainingData(
+            state.currentData?.heartRate ?? 0,  // From BLE (preserve HR)
+            _totalDistance,                      // From GPS (updated distance)
+            state.currentData?.strokes ?? 0,     // From BLE (preserve strokes - don't overwrite with 0!)
+            pace,                                // Calculated from GPS + elapsed time
+            speed: position.speed,               // From GPS (use position.speed, not derived)
+          );
+          
+          emit(state.copyWith(
+            currentData: mergedData,
+            elapsedTimeMillis: DateTime.now().millisecondsSinceEpoch - _startTimeMillis,
+          ));
+        },
+        onError: (error, stackTrace) {
+          debugPrint('🔴 GPS Stream Error: $error');
+          debugPrint('Stack: $stackTrace');
+        },
+        onDone: () {
+          debugPrint('⚠️ GPS Stream ended');
+        },
+      );
+      debugPrint('📍 GPS stream listener attached successfully');
+    } catch (e, st) {
+      debugPrint('🔴 Error subscribing to GPS: $e');
+      debugPrint('Stack: $st');
     }
   }
 
@@ -113,11 +278,13 @@ class LiveTrainingCubit extends Cubit<LiveTrainingState> {
   void pauseTraining() {
     if (state.status != TrainingStatus.running) return;
     _timer?.cancel();
+    _locationSub?.pause();  // ✅ Pause GPS updates
     emit(state.copyWith(status: TrainingStatus.paused));
   }
 
   void resumeTraining() {
     if (state.status != TrainingStatus.paused) return;
+    _locationSub?.resume();  // ✅ Resume GPS updates
     // Re-sync startTimeMillis so elapsed continues from previous value
     final now = DateTime.now().millisecondsSinceEpoch;
     final prevElapsed = state.elapsedTimeMillis > 0 ? state.elapsedTimeMillis : state.elapsedTime.inMilliseconds;
@@ -139,14 +306,20 @@ class LiveTrainingCubit extends Cubit<LiveTrainingState> {
 
     _timer?.cancel();
     await _bleStateSub?.cancel();
+    await _locationSub?.cancel();  // ✅ Cancel GPS stream
     _bleStateSub = null;
+    _locationSub = null;
+    
+    // 🔧 BUILD SESSION FIRST with current _totalDistance (BEFORE reset!)
+    final finalDistance = _totalDistance > 0 ? _totalDistance : (state.lapTimesMillis.isNotEmpty ? (state.lapTimesMillis.length * state.poolLengthMeters).toDouble() : 0.0);
+    debugPrint('📍 Saving session with distance: ${finalDistance.toStringAsFixed(2)}m');
 
     // Build SwimSession from history and elapsed time
     final session = SwimSession()
       ..startTime = _startTime ?? DateTime.now().subtract(state.elapsedTime)
       ..endTime = DateTime.now()
       ..elapsedTime = (state.elapsedTimeMillis > 0 ? (state.elapsedTimeMillis ~/ 1000) : state.elapsedTime.inSeconds)
-      ..distance = state.lapTimesMillis.isNotEmpty ? (state.lapTimesMillis.length * state.poolLengthMeters).toDouble() : (state.dataHistory.isNotEmpty ? state.dataHistory.last.distance : 0.0)
+      ..distance = finalDistance
       ..totalStrokes = state.dataHistory.isNotEmpty ? state.dataHistory.last.strokes : 0
       ..averageHeartRate = state.dataHistory.isNotEmpty
           ? (state.dataHistory.map((d) => d.heartRate).reduce((a, b) => a + b) ~/ state.dataHistory.length)
@@ -159,7 +332,7 @@ class LiveTrainingCubit extends Cubit<LiveTrainingState> {
           : 0.0
       ..laps = state.dataHistory.isNotEmpty ? (state.dataHistory.last.distance ~/ 25).toInt() : 0
       ..swimStyle = 'unknown'
-      ..calories = 0
+      ..calories = _calculateCalories()
       ..heartRateData = state.dataHistory.map((d) => d.heartRate).toList()
       ..paceData = state.dataHistory.map((d) => d.pace).toList()
       ..strokeData = state.dataHistory.map((d) => d.strokes).toList();
@@ -167,6 +340,11 @@ class LiveTrainingCubit extends Cubit<LiveTrainingState> {
     session.lapTimes = state.lapTimesMillis.isNotEmpty ? List<int>.from(state.lapTimesMillis) : null;
 
     await sessionRepo.add(session);
+
+    // 🔧 NOW reset GPS state for next session (AFTER saving!)
+    _lastPosition = null;
+    _totalDistance = 0.0;
+    debugPrint('📍 TOTAL RESET: distance=0.0m, position=null');
 
     emit(state.copyWith(status: TrainingStatus.finished, completedSession: session));
   }
@@ -177,7 +355,7 @@ class LiveTrainingCubit extends Cubit<LiveTrainingState> {
       ..startTime = _startTime ?? DateTime.now().subtract(state.elapsedTime)
       ..endTime = DateTime.now()
       ..elapsedTime = state.elapsedTime.inSeconds
-      ..distance = state.dataHistory.isNotEmpty ? state.dataHistory.last.distance : 0.0
+      ..distance = _totalDistance > 0 ? _totalDistance : (state.dataHistory.isNotEmpty ? state.dataHistory.last.distance : 0.0)
       ..totalStrokes = state.dataHistory.isNotEmpty ? state.dataHistory.last.strokes : 0
       ..averageHeartRate = state.dataHistory.isNotEmpty
           ? (state.dataHistory.map((d) => d.heartRate).reduce((a, b) => a + b) ~/ state.dataHistory.length)
@@ -266,6 +444,53 @@ class LiveTrainingCubit extends Cubit<LiveTrainingState> {
         debugPrint('📤 New state.currentData.heartRate: ${state.currentData?.heartRate ?? 'ERROR: still null!'}');
       }
     }
+  }
+
+  /// ✅ NEW: Calculate calories burned using Heart Rate Reserve (Keytel Formula)
+  /// Formula adjusts by gender:
+  /// - Men: caloriesPerMinute = (-55.0969 + (0.6309 * avgHR) + (0.1988 * weightKg) + (0.2017 * age)) / 4.184
+  /// - Women: caloriesPerMinute = (-20.4022 + (0.6309 * avgHR) + (0.1988 * weightKg) + (0.2017 * age)) / 4.184
+  int _calculateCalories() {
+    if (state.dataHistory.isEmpty) {
+      return 0;
+    }
+    
+    // 🔧 Get user profile data (with fallback to defaults)
+    final profile = userProfileCubit?.state.profile ?? UserProfileCubit.getDefaultProfile();
+    final age = profile.age;
+    final weightKg = profile.weightKg;
+    
+    // Calculate average heart rate from all data points
+    final avgHR = state.dataHistory
+        .map((d) => d.heartRate)
+        .reduce((a, b) => a + b) ~/ state.dataHistory.length;
+    
+    // Training duration in minutes
+    final trainingMinutes = state.elapsedTime.inSeconds / 60;
+    
+    if (kDebugMode) {
+      debugPrint('🔥 Calorie Calculation:');
+      debugPrint('  Age: $age years');
+      debugPrint('  Weight: ${weightKg.toStringAsFixed(1)} kg');
+      debugPrint('  Gender: ${profile.gender}');
+      debugPrint('  Avg HR: $avgHR bpm');
+      debugPrint('  Duration: ${trainingMinutes.toStringAsFixed(1)} minutes');
+    }
+    
+    // Keytel Formula (kcal/min) - adjusts by gender
+    final caloriesPerMinute = (profile.calorieCoefficient + 
+        (UserProfile.hrCoefficient * avgHR) + 
+        (UserProfile.weightCoefficient * weightKg) + 
+        (UserProfile.ageCoefficient * age)) / 4.184;
+    
+    final totalCalories = (caloriesPerMinute * trainingMinutes).round();
+    
+    if (kDebugMode) {
+      debugPrint('  Calories/min: ${caloriesPerMinute.toStringAsFixed(2)}');
+      debugPrint('  Total Calories: $totalCalories kcal');
+    }
+    
+    return totalCalories.clamp(0, 5000); // Max 5000 kcal to prevent outliers
   }
 
   /// ✅ PUBLIC: Called by BleConnectionCubit when device disconnects

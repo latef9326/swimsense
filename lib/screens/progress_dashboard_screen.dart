@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 // charts_flutter removed - using simple placeholders to avoid dependency issues
 import 'package:swimsense/blocs/analytics/analytics_cubit.dart';
+import 'package:swimsense/blocs/user_profile/user_profile_cubit.dart';
 import 'package:swimsense/models/heart_rate_zones.dart';
 import 'package:swimsense/models/training_metrics.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -298,10 +299,15 @@ class _ProgressDashboardScreenState extends State<ProgressDashboardScreen>
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: _buildIndicatorCard(
-                'Age',
-                '${fitness.trainingAgeMonths}',
-                'months',
+              child: BlocBuilder<UserProfileCubit, UserProfileState>(
+                builder: (context, profileState) {
+                  final userAge = profileState.profile?.age ?? 30;
+                  return _buildIndicatorCard(
+                    'Age',
+                    '$userAge',
+                    'years',
+                  );
+                },
               ),
             ),
           ],

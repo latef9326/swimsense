@@ -62,7 +62,7 @@ class _WaterBackgroundState extends State<WaterBackground>
                       width: size.width * 0.8,
                       height: size.width * 0.6,
                       decoration: BoxDecoration(
-                        gradient: RadialGradient(colors: [Color(0xFFb2ebf2), Color(0x00b2ebf2)]),
+                        gradient: const RadialGradient(colors: [Color(0xFFb2ebf2), Color(0x00b2ebf2)]),
                         borderRadius: BorderRadius.circular(200),
                       ),
                     ),
@@ -78,7 +78,7 @@ class _WaterBackgroundState extends State<WaterBackground>
                       width: size.width * 0.9,
                       height: size.width * 0.5,
                       decoration: BoxDecoration(
-                        gradient: RadialGradient(colors: [Color(0xFF80deea), Color(0x0080deea)]),
+                        gradient: const RadialGradient(colors: [Color(0xFF80deea), Color(0x0080deea)]),
                         borderRadius: BorderRadius.circular(200),
                       ),
                     ),

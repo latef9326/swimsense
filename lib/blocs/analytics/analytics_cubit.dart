@@ -1,11 +1,16 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:hive/hive.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math' as math;
 import 'package:swimsense/models/heart_rate_zones.dart';
 import 'package:swimsense/models/swim_session.dart';
 import 'package:swimsense/models/training_metrics.dart';
 import 'package:swimsense/repositories/analytics_repository.dart';
+import 'package:swimsense/repositories/swim_session_repository.dart';
+import 'package:swimsense/services/rhr_service.dart';
+import 'package:swimsense/services/fitness_calculator.dart';
+import 'package:swimsense/models/user_profile.dart';
 
 /// State classes (defined first so Cubit can reference them)
 abstract class AnalyticsState {}
@@ -58,6 +63,13 @@ class SessionAnalytics {
   });
 }
 
+/// 🔧 Static method for background RHR calculation with delay
+/// Uses Future.delayed instead of compute() because RhrService uses Hive (non-serializable)
+Future<int> _calculateRhrWithDelay(RhrService service) async {
+  await Future.delayed(Duration.zero); // Yield to UI thread
+  return await service.calculateRestingHR();
+}
+
 /// Analytics Cubit - manages computation and caching of advanced swimming metrics
 class AnalyticsCubit extends Cubit<AnalyticsState> {
   final Box<SwimSession> sessionBox;
@@ -99,13 +111,86 @@ class AnalyticsCubit extends Cubit<AnalyticsState> {
         return;
       }
 
+      // 🆕 Load RHR from RhrService (replaces hardcoded 60 bpm)
+      // 🔧 Use Future.delayed to avoid UI blocking (compute() fails with Hive non-serializable objects)
+      final repo = SwimSessionRepository(); // Create repo instance for RHR calculation
+      final rhrService = RhrService(repo: repo);
+      final rhr = await _calculateRhrWithDelay(rhrService);
+      _currentFitness.restingHeartRate = rhr;
+      if (kDebugMode) {
+        debugPrint('📊 RHR loaded from sessions: $rhr bpm');
+      }
+
+      // 🆕 Load user profile for VO2 Max and LTHR calculation
+      UserProfile? userProfile;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final age = prefs.getInt('user_age') ?? 30;
+        final weight = prefs.getDouble('user_weight') ?? 75.0;
+        final height = prefs.getDouble('user_height') ?? 180.0;
+        final gender = prefs.getString('user_gender') ?? 'male';
+        final maxHR = prefs.getInt('user_max_hr') ?? (220 - age);
+        
+        userProfile = UserProfile(
+          age: age,
+          weightKg: weight,
+          heightCm: height,
+          gender: gender,
+          maxHeartRate: maxHR,
+        );
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('⚠️  User profile not found, using defaults');
+        }
+      }
+
+      // Calculate VO2 Max from latest session if profile exists
+      if (userProfile != null && sessions.isNotEmpty) {
+        final latestSession = sessions.last;
+        try {
+          final vo2 = FitnessCalculator.calculateVO2Max(
+            session: latestSession,
+            profile: userProfile,
+            restingHR: rhr,
+          );
+          _currentFitness.vo2MaxEstimate = vo2;
+          
+          // Calculate LTHR
+          final lthr = FitnessCalculator.calculateLTHR(
+            profile: userProfile,
+            trainingLevel: _determineTrainingLevel(sessions),
+          );
+          _currentFitness.lactateThresholdHr = lthr;
+          
+          if (kDebugMode) {
+            debugPrint('📊 VO2 Max: ${vo2.toStringAsFixed(1)} mL/kg/min');
+            debugPrint('📊 LTHR: $lthr bpm');
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('⚠️  Error calculating VO2 Max/LTHR: $e');
+          }
+        }
+      } else {
+        // Set defaults if no profile
+        _currentFitness.vo2MaxEstimate = 0.0;
+        _currentFitness.lactateThresholdHr = 0;
+      }
+
       // Calculate all metrics
       final fitnessScore = _calculateFitnessScore(sessions);
       final weeklyComp = _calculateWeeklyComparison(sessions);
       final monthlyComp = _calculateMonthlyComparison(sessions);
       final trainingLists = _aggregateTrainingMetrics(sessions);
 
+      // 🆕 Calculate Consistency Score from last 30 days of sessions
+      final lastMonthSessions = sessions
+          .where((s) => s.startTime.isAfter(DateTime.now().subtract(const Duration(days: 30))))
+          .toList();
+      final consistencyScore = _calculateConsistencyScore(lastMonthSessions);
+
       _currentFitness.fitnessScore = fitnessScore;
+      _currentFitness.consistencyScore = consistencyScore;
       _weeklyComparison = weeklyComp;
       _monthlyComparison = monthlyComp;
       _recentMetrics = trainingLists;
@@ -173,6 +258,111 @@ class AnalyticsCubit extends Cubit<AnalyticsState> {
       emit(AnalyticsError('Failed to analyze session: $e'));
       rethrow;
     }
+  }
+
+  /// 🆕 Get weekly performance metrics (last 7 days)
+  Map<String, dynamic> getWeeklyMetrics() {
+    final now = DateTime.now();
+    final weekAgo = now.subtract(const Duration(days: 7));
+    
+    final weekSessions = sessionBox.values
+        .where((s) => !s.isPartial && s.startTime.isAfter(weekAgo))
+        .toList();
+
+    if (weekSessions.isEmpty) {
+      return {
+        'totalDistance': 0.0,
+        'averageDistance': 0.0,
+        'sessionCount': 0,
+        'totalDuration': 0,
+        'averagePace': 0.0,
+      };
+    }
+
+    final totalDistance = weekSessions.fold<double>(0, (a, s) => a + s.distance);
+    final totalDuration =
+        weekSessions.fold<int>(0, (a, s) => a + s.elapsedTime);
+
+    return {
+      'totalDistance': totalDistance,
+      'averageDistance': totalDistance / weekSessions.length,
+      'sessionCount': weekSessions.length,
+      'totalDuration': totalDuration,
+      'averagePace':
+          totalDuration > 0 ? (totalDistance / (totalDuration / 60.0)) : 0.0,
+    };
+  }
+
+  /// 🆕 Get monthly performance metrics (last 30 days)
+  Map<String, dynamic> getMonthlyMetrics() {
+    final now = DateTime.now();
+    final monthAgo = now.subtract(const Duration(days: 30));
+
+    final monthSessions = sessionBox.values
+        .where((s) => !s.isPartial && s.startTime.isAfter(monthAgo))
+        .toList();
+
+    if (monthSessions.isEmpty) {
+      return {
+        'totalDistance': 0.0,
+        'averageDistance': 0.0,
+        'sessionCount': 0,
+        'totalDuration': 0,
+        'averagePace': 0.0,
+      };
+    }
+
+    final totalDistance =
+        monthSessions.fold<double>(0, (a, s) => a + s.distance);
+    final totalDuration =
+        monthSessions.fold<int>(0, (a, s) => a + s.elapsedTime);
+
+    return {
+      'totalDistance': totalDistance,
+      'averageDistance': totalDistance / monthSessions.length,
+      'sessionCount': monthSessions.length,
+      'totalDuration': totalDuration,
+      'averagePace':
+          totalDuration > 0 ? (totalDistance / (totalDuration / 60.0)) : 0.0,
+    };
+  }
+
+  /// Determine training level based on number of sessions
+  /// beginner: < 10 sessions, intermediate: 10-50, advanced: > 50
+  String _determineTrainingLevel(List<SwimSession> sessions) {
+    if (sessions.length < 10) return 'beginner';
+    if (sessions.length < 50) return 'intermediate';
+    return 'advanced';
+  }
+
+  /// 🆕 Calculate Consistency Score - how stable your training distances are
+  /// Measures standard deviation of session distances (lower variance = higher consistency)
+  /// Range: 0-100 (100 = perfect consistency, all sessions same distance)
+  double _calculateConsistencyScore(List<SwimSession> sessions) {
+    if (sessions.isEmpty) return 0.0;
+    if (sessions.length < 2) return 100.0; // Single session = perfect consistency by definition
+    
+    final distances = sessions.map((s) => s.distance.toDouble()).toList();
+    final avgDistance = distances.fold<double>(0, (a, b) => a + b) / distances.length;
+    
+    if (avgDistance == 0) return 0.0;
+    
+    // Calculate standard deviation
+    final variance = distances
+        .map((d) => math.pow(d - avgDistance, 2))
+        .fold<double>(0, (a, b) => a + b) / distances.length;
+    final stdev = math.sqrt(variance);
+    
+    // Convert to consistency score: lower variance = higher score
+    // 100 - (coefficient of variation * 100)
+    final consistencyScore = 100.0 - (stdev / avgDistance * 100).clamp(0.0, 100.0);
+    
+    if (kDebugMode) {
+      debugPrint('📊 Consistency Score: ${consistencyScore.toStringAsFixed(1)} '
+                 '(avg distance: ${avgDistance.toStringAsFixed(1)}m, stdev: ${stdev.toStringAsFixed(1)}m)');
+    }
+    
+    return consistencyScore;
   }
 
   double _calculateFitnessScore(List<SwimSession> sessions) {

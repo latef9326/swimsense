@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../blocs/live_training/live_training_cubit.dart';
 import '../blocs/live_training/live_training_state.dart';
 import '../blocs/ble_connection/ble_connection_cubit.dart';
+import '../blocs/user_profile/user_profile_cubit.dart';
 import '../blocs/analytics/analytics_cubit.dart';
-import '../repositories/swim_session_repository.dart';
 import '../widgets/heart_rate_indicator.dart';
 import 'package:fl_chart/fl_chart.dart';
 
@@ -153,7 +152,14 @@ class _LiveTrainingScreenState extends State<LiveTrainingScreen> {
                       final hr = state.currentData?.heartRate ?? 0;
                       final distance = state.currentData?.distance ?? 0.0;
                       final pace = state.currentData?.pace ?? 0.0;
-                      final strokes = state.currentData?.strokes ?? 0;
+                      
+                      // 🔧 Get age from UserProfile (fallback to 30)
+                      final userProfileCubit = context.read<UserProfileCubit>();
+                      final profileAge = userProfileCubit.state.profile?.age ?? 30;
+                      
+                      // Calculate max HR based on age
+                      final maxHR = 220 - profileAge;
+                      final percentMaxHR = hr > 0 ? ((hr / maxHR) * 100).round() : 0;
 
                       // prefer millisecond-precision if available
                       final elapsedMs = state.elapsedTimeMillis > 0 ? state.elapsedTimeMillis : state.elapsedTime.inMilliseconds;
@@ -166,12 +172,29 @@ class _LiveTrainingScreenState extends State<LiveTrainingScreen> {
                           ),
                           const SizedBox(height: 12),
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceAround,
                             children: [
-                              HeartRateIndicator(heartRate: hr, age: 30),
-                              _bigStat('Dist', '${distance.toStringAsFixed(0)} m'),
-                              _bigStat('Pace', '${pace.toStringAsFixed(2)} min/100m'),
-                              _bigStat('Strokes', '$strokes'),
+                              SizedBox(
+                                width: 140,
+                                child: HeartRateIndicator(heartRate: hr, age: profileAge),
+                              ),
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                                  child: _bigStat('Distance', '${distance.toStringAsFixed(2)} m'),
+                                ),
+                              ),
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                                  child: _bigStat('Pace', '${pace.toStringAsFixed(2)} min/100m'),
+                                ),
+                              ),
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                                  child: _bigStat('Max HR', '$percentMaxHR%'),
+                                ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 12),
@@ -238,37 +261,129 @@ class _LiveTrainingScreenState extends State<LiveTrainingScreen> {
   // Live speed chart (m/s)
   Widget _buildSpeedChart(List<dynamic> history) {
     // history is a list of TrainingData objects
-    if (history.isEmpty) return const SizedBox.shrink();
+    if (history.isEmpty) {
+      return const SizedBox(
+        height: 200,
+        child: Center(child: Text('No speed data yet')),
+      );
+    }
 
+    // Convert to FlSpot with 2-second intervals
     final spots = <FlSpot>[];
     for (var i = 0; i < history.length; i++) {
       final item = history[i];
-      final time = i * 2; // approximate x value (seconds)
+      final timeSeconds = i * 2; // 2-sec intervals
       final speed = (item.speed is double) ? item.speed as double : 0.0;
-      spots.add(FlSpot(time.toDouble(), speed));
+      spots.add(FlSpot(timeSeconds.toDouble(), speed));
     }
 
+    // Find max speed for better scaling
+    final maxSpeed = spots.isEmpty 
+      ? 2.0 
+      : spots.map((s) => s.y).reduce((a, b) => a > b ? a : b);
+    
+    final chartMaxY = (maxSpeed * 1.2).clamp(1.0, 10.0); // Add 20% padding, max 10 m/s
+
     return Container(
-      height: 150,
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      height: 200,
+      margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.blue.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.withValues(alpha: 0.2), width: 1),
+      ),
       child: LineChart(
         LineChartData(
-          gridData: FlGridData(show: true),
-          titlesData: FlTitlesData(
-            bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
-            leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
+          gridData: FlGridData(
+            show: true,
+            drawHorizontalLine: true,
+            drawVerticalLine: false,
+            horizontalInterval: (chartMaxY / 4).ceilToDouble(),
+            getDrawingHorizontalLine: (value) => FlLine(
+              color: Colors.grey.withValues(alpha: 0.2),
+              strokeWidth: 0.8,
+            ),
           ),
-          borderData: FlBorderData(show: true),
+          titlesData: FlTitlesData(
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 30,
+                getTitlesWidget: (value, meta) {
+                  final seconds = value.toInt();
+                  return Text(
+                    '${seconds}s',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  );
+                },
+                interval: (spots.length * 2 / 5).ceilToDouble(), // Show ~5 labels
+              ),
+            ),
+            leftTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 40,
+                getTitlesWidget: (value, meta) {
+                  return Text(
+                    value.toStringAsFixed(1),
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  );
+                },
+                interval: (chartMaxY / 4).ceilToDouble(),
+              ),
+            ),
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          ),
+          borderData: FlBorderData(
+            show: true,
+            border: Border.all(color: Colors.grey.withValues(alpha: 0.2), width: 1),
+          ),
           lineBarsData: [
             LineChartBarData(
               spots: spots,
               isCurved: true,
+              curveSmoothness: 0.4,
               color: Colors.blue,
-              barWidth: 2,
-              belowBarData: BarAreaData(show: true, color: Colors.blue.withOpacity(0.1)),
-              dotData: FlDotData(show: false),
+              barWidth: 2.5,
+              belowBarData: BarAreaData(
+                show: true,
+                color: Colors.blue.withValues(alpha: 0.15),
+              ),
+              dotData: FlDotData(
+                show: true,
+                getDotPainter: (spot, percent, barData, index) {
+                  return FlDotCirclePainter(
+                    radius: 3,
+                    color: Colors.blue,
+                    strokeWidth: 1,
+                    strokeColor: Colors.white,
+                  );
+                },
+              ),
+              isStrokeCapRound: true,
             ),
           ],
+          maxY: chartMaxY,
+          minY: 0,
+          lineTouchData: LineTouchData(
+            enabled: true,
+            touchTooltipData: LineTouchTooltipData(
+              getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
+                return touchedBarSpots.map((barSpot) {
+                  return LineTooltipItem(
+                    '${barSpot.y.toStringAsFixed(2)} m/s\n${barSpot.x.toStringAsFixed(0)}s',
+                    const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  );
+                }).toList();
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -297,27 +412,15 @@ class _LiveTrainingScreenState extends State<LiveTrainingScreen> {
             ),
             const SizedBox(width: 8),
             // LAP button
-            AnimatedScale(
-            scale: _lapPressed ? 1.15 : 1.0,
-            duration: const Duration(milliseconds: 120),
-            child: ElevatedButton(
+            ElevatedButton(
               onPressed: isRunning
                   ? () {
-                      setState(() {
-                        _lapPressed = true;
-                      });
-                      Future.delayed(const Duration(milliseconds: 250), () {
-                        setState(() {
-                          _lapPressed = false;
-                        });
-                      });
                       cubit.recordLap();
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lap recorded')));
                     }
                   : null,
               child: const Text('LAP'),
             ),
-          ),
           const SizedBox(width: 8),
           ElevatedButton(
             onPressed: (state.status == TrainingStatus.running || state.status == TrainingStatus.paused) ? () => cubit.stopTraining() : null,

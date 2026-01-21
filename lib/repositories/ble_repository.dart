@@ -183,11 +183,10 @@ class BleRepository {
           hr = data.length > 1 ? data[1] : data[0];
         }
 
-        // Simulate other metrics based on HR
-        distance += 0.5; // small increment per update
+        // ❌ REMOVED: distance += 0.5; - DISTANCE ONLY FROM GPS!
         strokes += 1;
         final pace = 2.0 + (hr - 100) * 0.01; // Rough estimation
-        final speed = 0.5; // approximate speed in m/s for this update
+        const speed = 0.0; // Speed from GPS only, not BLE
 
         return TrainingData(hr, distance, strokes, pace, speed: speed);
       }).handleError((e) {

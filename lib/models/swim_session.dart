@@ -11,7 +11,9 @@ class SwimSession {
   late DateTime endTime;
 
   @HiveField(2)
-  int totalStrokes = 0;
+  // ⚠️ Deprecated: Polar H10 doesn't provide stroke data
+  // Future: Integrate with IMU sensor (FORM, Swimio) or manual input
+  int totalStrokes = 0; // Always 0 for HR-only training
 
   @HiveField(3)
   double distance = 0.0;
